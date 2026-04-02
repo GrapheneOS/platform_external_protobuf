@@ -2000,6 +2000,7 @@ bool CommandLineInterface::ParseArgument(const char* arg, std::string* name,
   if (*name == "-h" || *name == "--help" || *name == "--disallow_services" ||
       *name == "--include_imports" || *name == "--include_source_info" ||
       *name == "--retain_options" || *name == "--version" ||
+      *name == "--bulk" ||
       *name == "--decode_raw" ||
       *name == "--experimental_editions" ||
       *name == "--print_free_field_numbers" ||
@@ -2221,6 +2222,8 @@ CommandLineInterface::InterpretArgument(const std::string& name,
 
   } else if (name == "--experimental_allow_proto3_optional") {
     // Flag is no longer observed, but we allow it for backward compat.
+  } else if (name == "--bulk") {
+    is_bulk_ = true;
   } else if (name == "--encode" || name == "--decode" ||
              name == "--decode_raw") {
     if (mode_ != MODE_COMPILE) {
@@ -2830,7 +2833,6 @@ bool CommandLineInterface::EncodeOrDecode(const DescriptorPool* pool) {
   }
 
   DynamicMessageFactory dynamic_factory(pool);
-  std::unique_ptr<Message> message(dynamic_factory.GetPrototype(type)->New());
 
   if (mode_ == MODE_ENCODE) {
     SetFdToTextMode(STDIN_FILENO);
@@ -2841,7 +2843,66 @@ bool CommandLineInterface::EncodeOrDecode(const DescriptorPool* pool) {
   }
 
   io::FileInputStream in(STDIN_FILENO);
+
+  if (is_bulk_) {
+    io::CodedInputStream cis(&in);
+
+    uint32_t num_msgs;
+    if (!cis.ReadLittleEndian32(&num_msgs)) {
+      std::cerr << "unable to read num_msgs" << std::endl;
+      return false;
+    }
+    for (uint32_t i = 0; i < num_msgs; ++i) {
+      uint32_t in_len;
+      if (!cis.ReadLittleEndian32(&in_len)) {
+        std::cerr << "unable to read in_len" << std::endl;
+        return false;
+      }
+      if (in_len > INT_MAX) {
+        return false;
+      }
+      std::string in_path;
+      if (!cis.ReadString(&in_path, (int) in_len)) {
+        std::cerr << "unable to read in_path" << std::endl;
+        return false;
+      }
+      uint32_t out_len;
+      if (!cis.ReadLittleEndian32(&out_len)) {
+        std::cerr << "unable to read out_len" << std::endl;
+        return false;
+      }
+      if (out_len > INT_MAX) {
+        return false;
+      }
+      std::string out_path;
+      if (!cis.ReadString(&out_path, (int) out_len)) {
+        std::cerr << "unable to read out_path" << std::endl;
+        return false;
+      }
+
+      io::FileInputStream in_file_stream(open(in_path.c_str(), O_RDONLY));
+      in_file_stream.SetCloseOnDelete(true);
+
+      io::FileOutputStream out_file_stream(open(out_path.c_str(), O_CREAT | O_EXCL | O_WRONLY, 0644));
+      out_file_stream.SetCloseOnDelete(true);
+
+      if (!EncodeOrDecodeInner(*type, dynamic_factory, in_file_stream, out_file_stream)) {
+        std::cerr << "unable to decode " << in_path << " into " << out_path << std::endl;
+        return false;
+      }
+    }
+
+    return true;
+  }
+
   io::FileOutputStream out(STDOUT_FILENO);
+
+  return EncodeOrDecodeInner(*type, dynamic_factory, in, out);
+}
+
+bool CommandLineInterface::EncodeOrDecodeInner(const Descriptor& type, DynamicMessageFactory& dynamic_factory,
+                                               io::FileInputStream& in, io::FileOutputStream& out) {
+  std::unique_ptr<Message> message(dynamic_factory.GetPrototype(&type)->New());
 
   if (mode_ == MODE_ENCODE) {
     // Input is text.
