@@ -30,6 +30,7 @@
 #include "google/protobuf/compiler/plugin.pb.h"
 #include "google/protobuf/descriptor.pb.h"
 #include "google/protobuf/descriptor_database.h"
+#include "google/protobuf/io/zero_copy_stream_impl.h"
 #include "google/protobuf/port.h"
 
 // Must be included last.
@@ -313,6 +314,8 @@ class PROTOC_EXPORT CommandLineInterface {
 
   // Implements --encode and --decode.
   bool EncodeOrDecode(const DescriptorPool* pool);
+  bool EncodeOrDecodeInner(const Descriptor& type, DynamicMessageFactory& dynamic_factory,
+                           io::FileInputStream& in, io::FileOutputStream& out);
 
   // Implements the --descriptor_set_out option.
   bool WriteDescriptorSet(
@@ -407,6 +410,8 @@ class PROTOC_EXPORT CommandLineInterface {
   };
 
   Mode mode_ = MODE_COMPILE;
+
+  bool is_bulk_ = false;
 
   enum PrintMode {
     PRINT_NONE,         // Not in MODE_PRINT
